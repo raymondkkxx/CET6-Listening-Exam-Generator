@@ -76,6 +76,9 @@ def parse_and_validate_exam_json(raw_text: str) -> Tuple[dict, List[str]]:
     for idx, q in enumerate(questions, start=1):
         if not isinstance(q, dict):
             raise ValueError(f"questions 第 {idx} 题格式错误。")
+        if "id" not in q:
+            q["id"] = idx
+
         q_spoken = str(q.get("spoken_text") or q.get("display_text") or "").strip()
         if not q_spoken:
             raise ValueError(f"第 {idx} 题缺少题干文本。")
@@ -129,6 +132,7 @@ def export_exam_package(
     title = data.get("title", "CET-6 Listening Comprehension - Section A")
     questions = data.get("questions", [])
     dialogue = data.get("dialogue", [])
+    scratchpad = data.get("design_scratchpad")
 
     pre_sec = timing_meta.get("pre_question_read_sec", 8.0)
     post_sec = timing_meta.get("post_question_answer_sec", 8.0)
@@ -165,10 +169,24 @@ def export_exam_package(
             f.write(f"### Question {q['id']}: {q_disp}\n\n")
             for opt_key in ("A", "B", "C", "D"):
                 opt_text = q.get("options", {}).get(opt_key, "")
-                mark = " ?" if opt_key == str(q.get("answer", "")).strip().upper() else ""
+                mark = " ✓" if opt_key == str(q.get("answer", "")).strip().upper() else ""
                 f.write(f"- **{opt_key})** {opt_text}{mark}\n")
             f.write(f"\n- **正确答案**：**{q.get('answer', '')}**\n")
             f.write(f"- **解析定位**：{q.get('explanation', '')}\n\n")
+
+        if isinstance(scratchpad, dict):
+            f.write("---\n\n## 三、 命题信号与视听陷阱蓝图\n\n")
+            if scratchpad.get("new_scenario"):
+                f.write(f"- **迁移场景**：{scratchpad['new_scenario']}\n")
+            if scratchpad.get("target_word_count"):
+                f.write(f"- **体量配比**：{scratchpad['target_word_count']}\n\n")
+            for bp in scratchpad.get("question_blueprints", []):
+                if isinstance(bp, dict):
+                    f.write(
+                        f"- **Q{bp.get('q_id', '?')}** | 路标：`{bp.get('signal_marker', '')}` | "
+                        f"替换：`{bp.get('paraphrase_pair', '')}` | 陷阱：{bp.get('audio_visual_trap', '')}\n"
+                    )
+            f.write("\n")
 
     # 4. 保存结构化元数据 JSON（供刷题面板自动识别加载）
     json_path = os.path.join(target_dir, "exam_data.json")
@@ -179,6 +197,9 @@ def export_exam_package(
         "dialogue": dialogue,
         "questions": questions,
     }
+    if scratchpad is not None:
+        export_payload["design_scratchpad"] = scratchpad
+
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(export_payload, f, ensure_ascii=False, indent=2)
 

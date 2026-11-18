@@ -1,0 +1,66 @@
+# CET-6 Section A Simulation — Campus Rooftop Vertical Farm Pilot — 听力原文与答案解析
+
+## 一、 对话原文（Transcript）
+
+**Man:** Hi Maya, thanks for dropping by. I just finished reviewing your proposal for the campus rooftop vertical farm, and the sustainability committee is genuinely impressed with your ambition.
+
+**Woman:** Thanks, Professor Miller! We spent months mapping out how hydroponic racks could supply fresh greens to the main dining hall and cut food transport emissions by 35%. Initially, everyone assumed securing the $18,000 equipment grant would be our biggest hurdle. Actually, once the administration saw our energy projections, they approved the funding right away. What's holding us back now is getting structural clearance for the old library roof.
+
+**Man:** That makes sense. The library was built back in 1978, and saturated soil plus heavy water tanks add tremendous weight. Have the campus facilities engineers inspected the site yet?
+
+**Woman:** They ran a preliminary assessment last Tuesday. At first, we thought we could install automated climate sensors and high-output LED panels across the entire east wing. Well, the thing is, the engineers warned that concentrated weight in one section could stress the aging steel beams. Instead, they recommended spreading lightweight modular units evenly along the perimeter walls, which keeps the load well within safety limits.
+
+**Man:** Smart adjustment. That also solves your maintenance access issue. Still, running a year-round operation takes consistent labor, and student volunteers usually disappear right around midterm and final exams.
+
+**Woman:** We actually anticipated that exact problem after interviewing clubs at two neighboring universities. Many campus farms fail because they rely solely on unpaid student volunteers who burn out by November. Surprisingly, our biggest breakthrough came from partnering with the Agricultural Science department. They agreed to integrate daily crop monitoring into their introductory lab course, meaning around 40 freshmen will earn practical course credit for tending the system every week.
+
+**Man:** Tying it directly to academic credit is brilliant—it guarantees steady staffing without draining your budget. So what is your immediate next step before construction can officially kick off in spring?
+
+**Woman:** Before ordering any modular trays, we still need final sign-off from the campus fire marshal regarding emergency walkway widths. What really matters right now is submitting the revised blueprints by Friday afternoon so our vendor can lock in the winter discount rate before prices go up in January.
+
+**Man:** Send those updated drawings to my inbox tonight, and I will personally walk them over to the facilities office tomorrow morning.
+
+---
+
+## 二、 题干、答案与解析
+
+### Question 1: What is currently preventing Maya's team from moving forward with the project?
+
+- **A)** Applying for an eighteen-thousand-dollar equipment grant.
+- **B)** Reducing food transportation emissions for the dining hall.
+- **C)** Verifying whether the building can safely support the facility. ?
+- **D)** Calculating accurate energy projections for the administration.
+
+- **正确答案**：**C**
+- **解析定位**：【信号路标】Actually, ... What's holding us back now is -> 【原文定位】Turn 2 末尾：getting structural clearance for the old library roof -> 【同义替换】structural clearance（结构承重许可）替换为 safely support the facility（安全支撑该设施） -> 【干扰项陷阱】A、B、D 均直接照搬转折前的原文原词（equipment grant / food transport emissions / energy projections）构成视听一致陷阱。
+
+### Question 2: What did the campus facilities engineers suggest the team do?
+
+- **A)** Distributing lighter equipment around the outer edges of the roof. ?
+- **B)** Installing automated climate sensors across the entire east wing.
+- **C)** Reinforcing the aging steel beams with heavier water tanks.
+- **D)** Replacing high-output L E D panels to save electrical power.
+
+- **正确答案**：**A**
+- **解析定位**：【信号路标】Well, ... the thing is, / Instead, -> 【原文定位】Turn 4 末尾：spreading lightweight modular units evenly along the perimeter walls -> 【同义替换】spreading lightweight modular units（分散轻质模块化单元）替换为 Distributing lighter equipment，along the perimeter walls（沿外围墙体）替换为 around the outer edges -> 【干扰项陷阱】B、C、D 分别拼接了转折前的原词（automated climate sensors / east wing / aging steel beams / LED panels）诱导误选。
+
+### Question 3: How does Maya plan to ensure a steady workforce for the farm?
+
+- **A)** Recruiting unpaid student volunteers from neighboring universities.
+- **B)** Hiring full-time technicians to manage the system in November.
+- **C)** Reducing the scale of daily crop monitoring during exam weeks.
+- **D)** Linking farm upkeep to an academic class requirement. ?
+
+- **正确答案**：**D**
+- **解析定位**：【信号路标】Surprisingly, -> 【原文定位】Turn 6 末尾：integrate daily crop monitoring into their introductory lab course, meaning around 40 freshmen will earn practical course credit -> 【同义替换】integrate into lab course / earn course credit（纳入实验课并获得学分）替换为 Linking farm upkeep to an academic class requirement（将农场维护与课程学分要求挂钩） -> 【干扰项陷阱】A、B、C 借用了转折前提到的 unpaid student volunteers、neighboring universities、November 等原词干扰视听。
+
+### Question 4: What is Maya's top priority before Friday afternoon?
+
+- **A)** Ordering modular trays before the campus fire marshal inspects the roof.
+- **B)** Turning in updated design plans promptly to secure lower supplier pricing. ?
+- **C)** Expanding emergency walkway widths to meet January safety codes.
+- **D)** Negotiating a new delivery schedule with the equipment vendor.
+
+- **正确答案**：**B**
+- **解析定位**：【信号路标】What really matters right now is -> 【原文定位】Turn 8 末尾：submitting the revised blueprints by Friday afternoon so our vendor can lock in the winter discount rate -> 【同义替换】submitting the revised blueprints（提交修订蓝图）替换为 Turning in updated design plans，lock in the winter discount rate（锁定冬季折扣价）替换为 secure lower supplier pricing -> 【干扰项陷阱】A、C、D 借用了句首铺垫出现的 modular trays、fire marshal、emergency walkway widths 等原词制造干扰。
+

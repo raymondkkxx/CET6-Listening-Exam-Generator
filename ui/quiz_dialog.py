@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import os
-import time
+import threading
 import wave
 from typing import Dict, List, Optional
 
@@ -54,14 +54,61 @@ def load_wav_as_float32(wav_path: str):
     return data.astype(np.float32), framerate
 
 
-def resample_speed(audio: np.ndarray, speed: float) -> np.ndarray:
-    """使用纯 NumPy 线性插值调整播放倍速"""
-    if abs(speed - 1.0) < 1e-3 or len(audio) == 0:
+def resample_speed(
+    audio: np.ndarray, speed: float, sample_rate: int = 24000
+) -> np.ndarray:
+    """纯 NumPy WSOLA 语音变速不变调算法，确保 0.75x~1.25x 精听时人声音高不失真"""
+    if abs(speed - 1.0) < 1e-3 or len(audio) < max(512, sample_rate // 10):
         return audio
-    new_len = max(1, int(len(audio) / speed))
-    old_indices = np.arange(len(audio), dtype=np.float64)
-    new_indices = np.linspace(0, len(audio) - 1, new_len, dtype=np.float64)
-    return np.interp(new_indices, old_indices, audio).astype(np.float32)
+
+    win_size = max(256, int(sample_rate * 0.040))
+    if win_size % 2 == 1:
+        win_size += 1
+    hop_out = win_size // 2
+    hop_in = max(1, int(round(hop_out * speed)))
+    search_radius = max(1, int(sample_rate * 0.008))
+
+    win = np.hanning(win_size).astype(np.float32)
+    n_in = len(audio)
+    est_out_len = int(np.ceil(n_in / speed)) + win_size * 2
+    out = np.zeros(est_out_len, dtype=np.float32)
+    norm = np.zeros(est_out_len, dtype=np.float32)
+
+    first_len = min(win_size, n_in)
+    out[:first_len] += audio[:first_len] * win[:first_len]
+    norm[:first_len] += win[:first_len]
+
+    in_pos = hop_in
+    out_pos = hop_out
+
+    while in_pos + win_size <= n_in and out_pos + win_size <= est_out_len:
+        lo = max(0, in_pos - search_radius)
+        hi = min(n_in - win_size, in_pos + search_radius)
+        best_offset = in_pos
+
+        if hi > lo:
+            ref = out[out_pos : out_pos + hop_out]
+            best_corr = -1e30
+            for cand in range(lo, hi + 1, 2):
+                seg = audio[cand : cand + hop_out]
+                corr = float(np.dot(ref, seg))
+                if corr > best_corr:
+                    best_corr = corr
+                    best_offset = cand
+
+        frame = audio[best_offset : best_offset + win_size] * win
+        out[out_pos : out_pos + win_size] += frame
+        norm[out_pos : out_pos + win_size] += win
+
+        in_pos += hop_in
+        out_pos += hop_out
+
+    valid_len = min(out_pos + hop_out, est_out_len)
+    out = out[:valid_len]
+    norm = norm[:valid_len]
+    mask = norm > 1e-4
+    out[mask] /= norm[mask]
+    return np.clip(out, -1.0, 1.0).astype(np.float32)
 
 
 class OptionRowWidget(QFrame):
@@ -169,12 +216,16 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
         self.playback_audio: Optional[np.ndarray] = None
         self.sample_rate: int = 24000
         self.playback_speed: float = 1.0
+        self._speed_cache: Dict[float, np.ndarray] = {}
+
+        # 采样级精确音频流状态
+        self._audio_lock = threading.Lock()
+        self._audio_stream: Optional[sd.OutputStream] = None
+        self._play_cursor: int = 0
+        self._playback_reached_end: bool = False
 
         self.is_playing = False
         self.is_paused = False
-        self.play_start_time = 0.0
-        self.play_offset_sec = 0.0
-        self.pause_offset_sec = 0.0
         self.total_duration = 0.0
         self.is_slider_dragging = False
 
@@ -240,6 +291,7 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
         self.btn_play_pause.setObjectName("btnPrimary")
         self.btn_play_pause.setFocusPolicy(Qt.NoFocus)
         self.btn_play_pause.setEnabled(False)
+        self.btn_play_pause.setToolTip("播放 / 暂停 (Space)")
         self.btn_play_pause.clicked.connect(self.toggle_play_pause)
 
         self.btn_stop = QPushButton("■ Stop")
@@ -289,7 +341,7 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
         left_layout.setSpacing(10)
 
         q_header = QHBoxLayout()
-        lbl_q_title = QLabel("选择题作答区（盲听模式默认隐藏题干）")
+        lbl_q_title = QLabel("选择题作答区（盲听模式默认隐藏题干 | Space 暂停 | ←/→ 5s）")
         lbl_q_title.setObjectName("lblSectionTitle")
 
         self.chk_show_prompts = QCheckBox("显示题干")
@@ -445,8 +497,12 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
         self.exam_data = data
         self.base_audio = audio_arr
         self.sample_rate = sr
+        self._speed_cache = {1.0: audio_arr}
         self.playback_speed = 1.0
         self.playback_audio = audio_arr
+        with self._audio_lock:
+            self._play_cursor = 0
+            self._playback_reached_end = False
         self.total_duration = len(self.playback_audio) / max(1, self.sample_rate)
         self._refresh_speed_button_styles()
 
@@ -617,6 +673,7 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
     def _render_full_transcript_and_explanations(self):
         dialogue = self.exam_data.get("dialogue", [])
         questions = self.exam_data.get("questions", [])
+        scratchpad = self.exam_data.get("design_scratchpad")
 
         html_parts = ['<h3 style="color:#D96543; margin-top:0;">一、 对话原文（Transcript）</h3>']
         for turn in dialogue:
@@ -642,32 +699,54 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
                 f'<p style="color:#4A515E; background:#FFFFFF; padding:8px 10px; border-radius:8px; border:1px solid #E5E7EB;">{exp}</p>'
             )
 
+        if isinstance(scratchpad, dict) and scratchpad.get("question_blueprints"):
+            html_parts.append('<hr style="border:none; border-top:1px solid #E5E7EB; margin:16px 0;">')
+            html_parts.append('<h3 style="color:#D96543;">三、 信号路标与视听陷阱复盘</h3>')
+            for bp in scratchpad.get("question_blueprints", []):
+                if isinstance(bp, dict):
+                    html_parts.append(
+                        f'<p style="background:#FFFFFF; padding:8px 10px; border-radius:8px; border:1px solid #E5E7EB; margin-bottom:8px;">'
+                        f'<b>Q{bp.get("q_id", "?")} 信号词：</b><code>{bp.get("signal_marker", "")}</code><br>'
+                        f'<b>同义替换：</b>{bp.get("paraphrase_pair", "")}<br>'
+                        f'<span style="color:#717885;"><b>视听陷阱：</b>{bp.get("audio_visual_trap", "")}</span></p>'
+                    )
+
         self.review_browser.setHtml("".join(html_parts))
 
     def set_playback_speed(self, speed: float):
         if self.base_audio is None:
             return
         was_playing = self.is_playing
-        current_ratio = 0.0
-        if self.total_duration > 0:
-            elapsed = (
-                (time.time() - self.play_start_time) + self.play_offset_sec
-                if self.is_playing
-                else self.pause_offset_sec
-            )
-            current_ratio = max(0.0, min(1.0, elapsed / self.total_duration))
+        with self._audio_lock:
+            cur_samples = self._play_cursor
+            old_total_samples = max(1, len(self.playback_audio)) if self.playback_audio is not None else 1
+        current_ratio = max(0.0, min(1.0, cur_samples / old_total_samples))
 
-        self.stop_playback(reset=False)
+        self._close_audio_stream()
+        self.is_playing = False
+
+        if speed not in self._speed_cache:
+            self._speed_cache[speed] = resample_speed(
+                self.base_audio, speed, sample_rate=self.sample_rate
+            )
+
         self.playback_speed = speed
-        self.playback_audio = resample_speed(self.base_audio, speed)
+        self.playback_audio = self._speed_cache[speed]
         self.total_duration = len(self.playback_audio) / max(1, self.sample_rate)
-        self.pause_offset_sec = current_ratio * self.total_duration
+        new_cursor = int(current_ratio * len(self.playback_audio))
+        with self._audio_lock:
+            self._play_cursor = new_cursor
+            self._playback_reached_end = False
+
         self._refresh_speed_button_styles()
 
         if was_playing:
-            self._start_audio_from(self.pause_offset_sec)
+            self._start_audio_from_sample(new_cursor)
         else:
-            self._update_timer_label(self.pause_offset_sec, self.total_duration)
+            cur_sec = new_cursor / max(1, self.sample_rate)
+            self._update_timer_label(cur_sec, self.total_duration)
+            if self.total_duration > 0:
+                self.slider_progress.setValue(int((cur_sec / self.total_duration) * 1000))
 
     def _refresh_speed_button_styles(self):
         for spd, btn in self.speed_buttons.items():
@@ -678,48 +757,101 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
+    def _close_audio_stream(self):
+        self.progress_timer.stop()
+        if self._audio_stream is not None:
+            try:
+                self._audio_stream.stop()
+                self._audio_stream.close()
+            except Exception:
+                pass
+            self._audio_stream = None
+
+    def _audio_stream_callback(self, outdata, frames, time_info, status):
+        with self._audio_lock:
+            audio = self.playback_audio
+            if audio is None:
+                outdata.fill(0)
+                return
+            cur = self._play_cursor
+            remain = len(audio) - cur
+            if remain <= 0:
+                outdata.fill(0)
+                self._playback_reached_end = True
+                return
+            take = min(frames, remain)
+            outdata[:take, 0] = audio[cur : cur + take]
+            if take < frames:
+                outdata[take:, 0] = 0.0
+                self._playback_reached_end = True
+            self._play_cursor = cur + take
+
     def toggle_play_pause(self):
         if self.playback_audio is None:
             return
         if self.is_playing:
-            elapsed = (time.time() - self.play_start_time) + self.play_offset_sec
-            self.pause_offset_sec = max(0.0, min(elapsed, self.total_duration))
-            sd.stop()
+            self._close_audio_stream()
             self.is_playing = False
             self.is_paused = True
-            self.progress_timer.stop()
             self.btn_play_pause.setText("▶ Resume")
         elif self.is_paused:
-            if self.pause_offset_sec >= self.total_duration:
-                self.pause_offset_sec = 0.0
-            self._start_audio_from(self.pause_offset_sec)
+            with self._audio_lock:
+                cur = self._play_cursor
+                if cur >= len(self.playback_audio):
+                    cur = 0
+                    self._play_cursor = 0
+            self._start_audio_from_sample(cur)
         else:
-            self._start_audio_from(0.0)
+            self._start_audio_from_sample(0)
 
-    def _start_audio_from(self, from_sec: float):
+    def _start_audio_from_sample(self, start_idx: int):
         if self.playback_audio is None or len(self.playback_audio) == 0:
             return
-        start_idx = int(from_sec * self.sample_rate)
-        start_idx = max(0, min(start_idx, len(self.playback_audio)))
+        start_idx = max(0, min(start_idx, len(self.playback_audio) - 1))
+        self._close_audio_stream()
 
-        sd.stop()
-        sd.play(self.playback_audio[start_idx:], samplerate=self.sample_rate)
+        with self._audio_lock:
+            self._play_cursor = start_idx
+            self._playback_reached_end = False
 
-        self.play_start_time = time.time()
-        self.play_offset_sec = from_sec
+        self._audio_stream = sd.OutputStream(
+            samplerate=self.sample_rate,
+            channels=1,
+            dtype="float32",
+            callback=self._audio_stream_callback,
+        )
+        self._audio_stream.start()
+
         self.is_playing = True
         self.is_paused = False
         self.btn_play_pause.setText("❚❚ Pause")
         self.btn_stop.setEnabled(True)
         self.progress_timer.start()
 
+    def seek_relative(self, delta_sec: float):
+        """快进或快退指定秒数（精听复盘高频动作）"""
+        if self.playback_audio is None or self.total_duration <= 0:
+            return
+        with self._audio_lock:
+            cur_sec = self._play_cursor / max(1, self.sample_rate)
+        target_sec = max(0.0, min(self.total_duration - 0.05, cur_sec + delta_sec))
+        target_sample = int(target_sec * self.sample_rate)
+        if self.is_playing:
+            self._start_audio_from_sample(target_sample)
+        else:
+            with self._audio_lock:
+                self._play_cursor = target_sample
+            self.slider_progress.setValue(int((target_sec / self.total_duration) * 1000))
+            self._update_timer_label(target_sec, self.total_duration)
+
     def stop_playback(self, reset: bool = True):
-        sd.stop()
+        self._close_audio_stream()
         self.is_playing = False
         self.is_paused = False
-        self.progress_timer.stop()
         if reset:
-            self.pause_offset_sec = 0.0
+            with self._audio_lock:
+                self._play_cursor = 0
+                self._playback_reached_end = False
             self.slider_progress.setValue(0)
             self._update_timer_label(0.0, self.total_duration)
         self.btn_play_pause.setText("▶ Play")
@@ -728,13 +860,17 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
     def _update_progress_ui(self):
         if not self.is_playing:
             return
-        elapsed = (time.time() - self.play_start_time) + self.play_offset_sec
-        if elapsed >= self.total_duration:
+        with self._audio_lock:
+            cur = self._play_cursor
+            ended = self._playback_reached_end
+
+        if ended:
             self.stop_playback(reset=True)
             return
 
+        elapsed = cur / max(1, self.sample_rate)
         if not self.is_slider_dragging and self.total_duration > 0:
-            ratio = elapsed / self.total_duration
+            ratio = min(1.0, elapsed / self.total_duration)
             self.slider_progress.setValue(int(ratio * 1000))
             self._update_timer_label(elapsed, self.total_duration)
 
@@ -749,13 +885,39 @@ class QuizPracticeDialog(QDialog, FramelessWindowMixin):
     def _on_slider_released(self):
         self.is_slider_dragging = False
         if self.playback_audio is not None and self.total_duration > 0:
-            target = (self.slider_progress.value() / 1000.0) * self.total_duration
-            self._start_audio_from(target)
+            ratio = self.slider_progress.value() / 1000.0
+            target_sample = int(ratio * len(self.playback_audio))
+            if self.is_playing:
+                self._start_audio_from_sample(target_sample)
+            else:
+                with self._audio_lock:
+                    self._play_cursor = target_sample
+                self._update_timer_label(ratio * self.total_duration, self.total_duration)
 
     def _on_slider_jump(self, ratio: float):
         if self.playback_audio is not None and self.total_duration > 0:
-            target = ratio * self.total_duration
-            self._start_audio_from(target)
+            target_sample = int(ratio * len(self.playback_audio))
+            if self.is_playing:
+                self._start_audio_from_sample(target_sample)
+            else:
+                with self._audio_lock:
+                    self._play_cursor = target_sample
+                self._update_timer_label(ratio * self.total_duration, self.total_duration)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Space:
+            self.toggle_play_pause()
+            event.accept()
+            return
+        if event.key() == Qt.Key_Left:
+            self.seek_relative(-5.0)
+            event.accept()
+            return
+        if event.key() == Qt.Key_Right:
+            self.seek_relative(5.0)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event):
         self.stop_playback(reset=True)

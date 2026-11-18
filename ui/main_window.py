@@ -208,6 +208,7 @@ class Cet6GeneratorMainWindow(QWidget, FramelessWindowMixin):
         super().__init__()
         self.single_instance_key = single_instance_key
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self.setAcceptDrops(True)
         self.init_frameless_drag(allow_resize=True)
         self.setMinimumSize(760, 520)
         self.resize(910, 615)
@@ -394,10 +395,11 @@ class Cet6GeneratorMainWindow(QWidget, FramelessWindowMixin):
         left_layout.setSpacing(10)
 
         self.json_editor = QPlainTextEdit()
+        self.json_editor.setAcceptDrops(False)
         self.json_editor.setPlaceholderText(
             "Step 1: 点击右下角 [Step Guide] 查看流程，或点 [Copy Prompt] / [Edit Prompt] 获取指令\n"
-            "Step 2: 将 AI 返回的 JSON 粘贴至此（自动剥离代码块外壳并校验格式）\n"
-            "Step 3: 点击右侧 [▶ Generate Exam] 命名导出考场听力包"
+            "Step 2: 将 AI 返回的 JSON 粘贴或拖入此处（自动剥离代码块外壳并校验格式）\n"
+            "Step 3: 点击右侧 [▶ Generate Exam] 命名导出考场听力包（也可直接拖入练习文件夹进入刷题）"
         )
         left_layout.addWidget(self.json_editor, stretch=1)
 
@@ -455,9 +457,14 @@ class Cet6GeneratorMainWindow(QWidget, FramelessWindowMixin):
         dev_row.addWidget(QLabel("Device:"))
         self.combo_device = QComboBox()
         self.combo_device.setFocusPolicy(Qt.NoFocus)
+        has_cuda = False
+        try:
+            has_cuda = torch.cuda.is_available()
+        except Exception:
+            has_cuda = False
         gpu_label = (
             f"GPU ({torch.cuda.get_device_name(0)})"
-            if torch.cuda.is_available()
+            if has_cuda
             else "CPU (No CUDA)"
         )
         self.combo_device.addItem(gpu_label, "auto")
@@ -614,6 +621,28 @@ class Cet6GeneratorMainWindow(QWidget, FramelessWindowMixin):
                             voices.append(f"{key} (Local Custom)")
                             known_keys.add(key)
         return voices
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        local_path = urls[0].toLocalFile()
+        if os.path.isdir(local_path):
+            dlg = QuizPracticeDialog(initial_dir=local_path, parent=self)
+            dlg.exec_()
+        elif os.path.isfile(local_path) and local_path.lower().endswith((".json", ".txt")):
+            try:
+                with open(local_path, "r", encoding="utf-8-sig") as f:
+                    self.json_editor.setPlainText(f.read())
+                self._validate_current_json()
+            except Exception as e:
+                QMessageBox.warning(self, "读取文件失败", str(e))
 
     def _quick_copy_prompt(self):
         QApplication.clipboard().setText(get_ai_prompt())
@@ -793,14 +822,18 @@ class Cet6GeneratorMainWindow(QWidget, FramelessWindowMixin):
 
     def open_quiz_panel(self):
         dlg = QuizPracticeDialog(parent=self)
+        if self.last_generated_dir and os.path.isdir(self.last_generated_dir):
+            dlg.current_dir = self.last_generated_dir
         if dlg.prompt_and_load_folder():
             dlg.exec_()
 
     def _on_topmost_toggled(self, checked: bool):
+        old_pos = self.pos()
         flags = Qt.FramelessWindowHint | Qt.Window
         if checked:
             flags |= Qt.WindowStaysOnTopHint
         self.setWindowFlags(flags)
+        self.move(old_pos)
         self.show()
         self._save_preferences()
 

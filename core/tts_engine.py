@@ -17,6 +17,11 @@ from core.settings import (
     get_project_root,
 )
 
+QUESTION_PREFIX_RE = re.compile(
+    r"^\s*question\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*[.:,]\s*",
+    re.IGNORECASE,
+)
+
 
 def auto_detect_espeak(kokoro_root: str = DEFAULT_KOKORO_ROOT):
     base_dir = get_project_root()
@@ -44,8 +49,15 @@ warnings.filterwarnings("ignore")
 from kokoro import KPipeline  # noqa: E402
 
 
+def strip_duplicate_question_prefix(text: str) -> str:
+    """剥离题干开头已有的 'Question 1.' / 'Question one.'，防止与考官前缀重复拼接"""
+    if not text:
+        return ""
+    return QUESTION_PREFIX_RE.sub("", text).strip()
+
+
 def clean_for_kokoro(text: str) -> str:
-    """保留 [word](/ipa/) 音标强制发音语法，过滤中文与异常乱读符号"""
+    """保留 [word](/ipa/) 音标强制发音语法，规整停顿标点，过滤中文与异常乱读符号"""
     if not text:
         return ""
 
@@ -56,6 +68,8 @@ def clean_for_kokoro(text: str) -> str:
         return f"__PHONEME_{len(phoneme_blocks) - 1}__"
 
     protected = re.sub(r"\[[^\]]+\]\(/[^)]+/\)", _stash_phoneme, text)
+    # 将双连字符或破折号统一转为自然换气逗号，避免 Misaki G2P 韵律异常
+    protected = re.sub(r"\s*(?:--+|[—–])\s*", ", ", protected)
     protected = re.sub(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]", "", protected)
     protected = re.sub(
         r"[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]",
@@ -86,6 +100,21 @@ def trim_edge_silence(
     start = max(0, active[0] - pad_samples)
     end = min(len(audio), active[-1] + pad_samples)
     return audio[start:end]
+
+
+def apply_micro_fade(
+    audio: np.ndarray, sample_rate: int = SAMPLE_RATE, fade_ms: float = 8.0
+) -> np.ndarray:
+    """对音频片段首尾施加极短淡入淡出，消除多段拼接时的直流跳变爆音"""
+    n = len(audio)
+    fade_samples = int(sample_rate * (fade_ms / 1000.0))
+    if n < fade_samples * 2 + 10 or fade_samples <= 1:
+        return audio
+    out = audio.copy()
+    ramp = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
+    out[:fade_samples] *= ramp
+    out[-fade_samples:] *= ramp[::-1]
+    return out
 
 
 def normalize_loudness(
@@ -215,7 +244,8 @@ class ExamSynthThread(QThread):
 
         raw_audio = np.concatenate(chunks)
         trimmed = trim_edge_silence(raw_audio)
-        return normalize_loudness(trimmed)
+        normed = normalize_loudness(trimmed)
+        return apply_micro_fade(normed)
 
     def run(self):
         start_time = time.time()
@@ -270,18 +300,20 @@ class ExamSynthThread(QThread):
             for idx, q in enumerate(questions):
                 if self.is_cancelled:
                     return
+                q_id = q.get("id", idx + 1)
                 done_steps += 1
                 pct = int(10 + (done_steps / total_steps) * 80)
                 self.progress_updated.emit(
-                    pct, f"正在合成考官读题 Question {q['id']} ({idx + 1}/{len(questions)})..."
+                    pct, f"正在合成考官读题 Question {q_id} ({idx + 1}/{len(questions)})..."
                 )
 
                 timeline.append(make_silence(pre_q_sec))
                 if ding_audio is not None:
                     timeline.append(ding_audio)
 
-                q_spoken = q.get("spoken_text") or q.get("display_text", "")
-                prompt_text = f"Question {q['id']}. {q_spoken}"
+                raw_q_spoken = q.get("spoken_text") or q.get("display_text", "")
+                clean_q_body = strip_duplicate_question_prefix(raw_q_spoken)
+                prompt_text = f"Question {q_id}. {clean_q_body}"
                 q_seg = self._synth_single_line(
                     prompt_text, voice_examiner, speed, device
                 )
